@@ -38,6 +38,9 @@ jobs:
         run: |
           touch dist/public/.nojekyll
           printf '%s\n' 'ruta-clara.casi40tech.lat' > dist/public/CNAME
+          VERSION="$(date -u +%Y%m%d%H%M%S)"
+          sed -i -E "s#(assets/index-[^\"']+\.(js|css))#\1?v=${VERSION}#g" dist/public/index.html
+          printf '%s\n' "Cache-busting version: ${VERSION}"
 
       - name: Publish dist to gh-pages
         uses: peaceiris/actions-gh-pages@v4
