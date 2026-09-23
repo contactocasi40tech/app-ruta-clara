@@ -39,7 +39,10 @@ jobs:
           touch dist/public/.nojekyll
           printf '%s\n' 'ruta-clara.casi40tech.lat' > dist/public/CNAME
           VERSION="$(date -u +%Y%m%d%H%M%S)"
-          sed -i -E "s#(assets/index-[^\"']+\.(js|css))#\1?v=${VERSION}#g" dist/public/index.html
+          for asset in dist/public/assets/index-*.js dist/public/assets/index-*.css; do
+            asset_name="${asset#dist/public/}"
+            sed -i "s#${asset_name}#${asset_name}?v=${VERSION}#g" dist/public/index.html
+          done
           printf '%s\n' "Cache-busting version: ${VERSION}"
 
       - name: Publish dist to gh-pages
