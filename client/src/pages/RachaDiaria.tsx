@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { useSupabaseAuth } from "@/contexts/SupabaseAuthContext";
-import ActivityClock from "@/components/ActivityClock.jsx";
+import Activity from "@/components/Activity.jsx";
 import {
   Activity,
   AlertTriangle,
@@ -348,7 +348,7 @@ export default function RachaDiaria() {
                 <label className="grid gap-1.5 text-sm font-medium text-[#33483b]">Terreno<select value={terrain} onChange={(event) => setTerrain(event.target.value as Terrain)} className="h-11 rounded-xl border border-[#ded8cc] bg-[#fffdfa] px-3 outline-none focus:border-[#3f7659]">{(["Plano", "Destapado", "Subida"] as Terrain[]).map((value) => <option key={value}>{value}</option>)}</select></label>
                 <Field label={`Inclinación (${inclination}%)`} type="range" min="0" max="15" value={inclination} onChange={(event) => setInclination(Number(event.target.value))} className="h-11 accent-[#235b42]" />
               </div>
-              <ActivityClock activity={activity} met={ACTIVITY_MET[activity]} weightKg={weightKg} minutes={minutes} kcal={calculation.kcal} manualBpm={manualBpm} onWeightChange={setWeightKg} onManualBpmChange={setManualBpm} onSave={(metrics) => void saveActivity(metrics)} saving={savingActivity} userReady={Boolean(user)} feedback={feedback?.type === "error" ? feedback.text : undefined} />
+              <Activity activity={activity} met={ACTIVITY_MET[activity]} weightKg={weightKg} minutes={minutes} kcal={calculation.kcal} manualBpm={manualBpm} onWeightChange={setWeightKg} onManualBpmChange={setManualBpm} onSave={(metrics) => void saveActivity(metrics)} saving={savingActivity} userReady={Boolean(user)} feedback={feedback?.type === "error" ? feedback.text : undefined} />
             </div>
           </Section>
 
