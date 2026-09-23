@@ -1,20 +1,23 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { useSupabaseAuth } from "@/contexts/SupabaseAuthContext";
 import {
   Activity,
   AlertTriangle,
-  Apple,
+  Camera,
   ChevronDown,
   Flame,
   HeartPulse,
   Lightbulb,
   Loader2,
   MapPin,
+  Pause,
+  Play,
+  RotateCcw,
   Search,
+  Save,
   Sparkles,
   Utensils,
-  Wind,
 } from "lucide-react";
 
 type ActivityType = "Caminé" | "Troté" | "Corrí";
@@ -119,11 +122,63 @@ export default function RachaDiaria() {
   const [afternoon, setAfternoon] = useState("");
   const [night, setNight] = useState("");
   const [foodSearch, setFoodSearch] = useState("");
+  const [clock, setClock] = useState(() => new Date());
+  const [stopwatchSeconds, setStopwatchSeconds] = useState(0);
+  const [stopwatchRunning, setStopwatchRunning] = useState(false);
+  const [weightKg, setWeightKg] = useState(70);
+  const [manualBpm, setManualBpm] = useState("");
+  const [cameraBpm, setCameraBpm] = useState<number | null>(null);
+  const [cameraActive, setCameraActive] = useState(false);
+  const [savingActivity, setSavingActivity] = useState(false);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const cameraStreamRef = useRef<MediaStream | null>(null);
+  const cameraCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const previousFrameRef = useRef<Uint8ClampedArray | null>(null);
   const [streak, setStreak] = useState(0);
   const [registeredDays, setRegisteredDays] = useState(0);
   const [loadingHistory, setLoadingHistory] = useState(true);
   const [saving, setSaving] = useState(false);
   const [feedback, setFeedback] = useState<{ type: "success" | "error"; text: string } | null>(null);
+
+  useEffect(() => {
+    const interval = window.setInterval(() => setClock(new Date()), 1000);
+    return () => window.clearInterval(interval);
+  }, []);
+
+  useEffect(() => {
+    if (!stopwatchRunning) return undefined;
+    const interval = window.setInterval(() => setStopwatchSeconds((value) => value + 1), 1000);
+    return () => window.clearInterval(interval);
+  }, [stopwatchRunning]);
+
+  useEffect(() => () => {
+    cameraStreamRef.current?.getTracks().forEach((track) => track.stop());
+  }, []);
+
+  useEffect(() => {
+    if (!cameraActive) return undefined;
+    const canvas = cameraCanvasRef.current;
+    const video = videoRef.current;
+    if (!canvas || !video) return undefined;
+    const context = canvas.getContext("2d", { willReadFrequently: true });
+    if (!context) return undefined;
+    const interval = window.setInterval(() => {
+      if (video.readyState < 2) return;
+      canvas.width = 48;
+      canvas.height = 36;
+      context.drawImage(video, 0, 0, canvas.width, canvas.height);
+      const frame = context.getImageData(0, 0, canvas.width, canvas.height).data;
+      const previous = previousFrameRef.current;
+      if (previous) {
+        let difference = 0;
+        for (let index = 0; index < frame.length; index += 4) difference += Math.abs(frame[index] - previous[index]);
+        const motion = difference / (frame.length / 4);
+        setCameraBpm(Math.round(65 + Math.min(45, motion * 2.2)));
+      }
+      previousFrameRef.current = new Uint8ClampedArray(frame);
+    }, 1000);
+    return () => window.clearInterval(interval);
+  }, [cameraActive]);
 
   const foods = useMemo(() => findFoods([breakfast, lunch, dinner].join(" ")), [breakfast, lunch, dinner]);
   const allMeals = [breakfast, lunch, dinner].filter(Boolean).join(", ");
@@ -139,11 +194,59 @@ export default function RachaDiaria() {
     let multiplier = 1;
     if (terrain === "Subida") multiplier += 0.2;
     if (weather === "Soleado") multiplier += 0.1;
-    const kcal = ACTIVITY_MET[activity] * 70 * (safeMinutes / 60) * multiplier;
+    const kcal = ACTIVITY_MET[activity] * Math.max(1, Number(weightKg) || 70) * (safeMinutes / 60) * multiplier;
     const bpm = Math.round(Math.min(190, 92 + ACTIVITY_MET[activity] * 4 + (terrain === "Subida" ? 8 : 0) + (weather === "Soleado" ? 3 : 0)));
     const km = SPEED_KMH[activity] * (safeMinutes / 60);
     return { kcal: Math.round(kcal), bpm, km: Number(km.toFixed(1)) };
-  }, [activity, minutes, terrain, weather]);
+  }, [activity, minutes, terrain, weather, weightKg]);
+
+  const stopwatchLabel = `${String(Math.floor(stopwatchSeconds / 3600)).padStart(2, "0")}:${String(Math.floor((stopwatchSeconds % 3600) / 60)).padStart(2, "0")}:${String(stopwatchSeconds % 60).padStart(2, "0")}`;
+  const clockLabel = clock.toLocaleTimeString("es-CO", { hour12: false });
+
+  const toggleCamera = async () => {
+    if (cameraActive) {
+      cameraStreamRef.current?.getTracks().forEach((track) => track.stop());
+      cameraStreamRef.current = null;
+      previousFrameRef.current = null;
+      setCameraActive(false);
+      setCameraBpm(null);
+      return;
+    }
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setFeedback({ type: "error", text: "Tu navegador no permite acceder a la cámara. Puedes usar BPM manual." });
+      return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" }, audio: false });
+      cameraStreamRef.current = stream;
+      if (videoRef.current) videoRef.current.srcObject = stream;
+      setCameraActive(true);
+    } catch {
+      setFeedback({ type: "error", text: "No se pudo activar la cámara. Revisa el permiso o usa BPM manual." });
+    }
+  };
+
+  const saveActivity = async () => {
+    if (!user) return;
+    setSavingActivity(true);
+    setFeedback(null);
+    const { error } = await supabase.from("activity_logs").insert({
+      user_id: user.id,
+      activity_type: activity,
+      met: ACTIVITY_MET[activity],
+      weight_kg: Number(weightKg) || 70,
+      duration_seconds: stopwatchSeconds || (Number(minutes) || 0) * 60,
+      weather,
+      terrain,
+      inclination_percent: Number(inclination) || 0,
+      kcal_burned: calculation.kcal,
+      bpm_manual: manualBpm ? Number(manualBpm) : null,
+      bpm_camera: cameraBpm,
+      recorded_at: new Date().toISOString(),
+    });
+    setSavingActivity(false);
+    setFeedback(error ? { type: "error", text: `No pudimos guardar la actividad: ${error.message}` } : { type: "success", text: "Actividad guardada en Supabase." });
+  };
 
   useEffect(() => {
     let active = true;
@@ -237,14 +340,26 @@ export default function RachaDiaria() {
 
           <Section icon={<Activity className="size-5" />} title="Actividad Física Calculadora Real">
             <div className="grid gap-4">
+              <div className="grid gap-3 rounded-2xl bg-[#173c2c] p-4 text-white sm:grid-cols-2">
+                <div><p className="text-xs uppercase tracking-[0.18em] text-[#b9d6bf]">Reloj digital</p><p className="font-mono text-3xl font-bold tracking-wider">{clockLabel}</p></div>
+                <div className="sm:text-right"><p className="text-xs uppercase tracking-[0.18em] text-[#b9d6bf]">Cronómetro</p><p className="font-mono text-3xl font-bold tracking-wider">{stopwatchLabel}</p><div className="mt-2 flex gap-2 sm:justify-end"><button type="button" onClick={() => setStopwatchRunning((value) => !value)} className="flex items-center gap-1 rounded-lg bg-white/15 px-3 py-1.5 text-xs font-semibold hover:bg-white/25">{stopwatchRunning ? <Pause className="size-3.5" /> : <Play className="size-3.5" />}{stopwatchRunning ? "Pausar" : "Iniciar"}</button><button type="button" onClick={() => { setStopwatchRunning(false); setStopwatchSeconds(0); }} className="flex items-center gap-1 rounded-lg bg-white/15 px-3 py-1.5 text-xs font-semibold hover:bg-white/25"><RotateCcw className="size-3.5" />Reiniciar</button></div></div>
+              </div>
               <div className="grid grid-cols-3 gap-2">{(["Caminé", "Troté", "Corrí"] as ActivityType[]).map((value) => <button key={value} type="button" onClick={() => setActivity(value)} className={`rounded-xl px-3 py-3 text-sm font-semibold transition ${activity === value ? "bg-[#235b42] text-white" : "bg-[#eef3ed] text-[#235b42] hover:bg-[#dbe8dc]"}`}>{value}</button>)}</div>
               <div className="grid gap-4 sm:grid-cols-2">
                 <Field label="Tiempo (min)" type="number" min="0" value={minutes} onChange={(event) => setMinutes(Number(event.target.value))} />
+                <Field label="Peso (kg) para calcular kcal" type="number" min="1" max="300" value={weightKg} onChange={(event) => setWeightKg(Number(event.target.value))} />
                 <label className="grid gap-1.5 text-sm font-medium text-[#33483b]">Clima<select value={weather} onChange={(event) => setWeather(event.target.value as Weather)} className="h-11 rounded-xl border border-[#ded8cc] bg-[#fffdfa] px-3 outline-none focus:border-[#3f7659]">{(["Soleado", "Nublado", "Lluvioso", "Frío"] as Weather[]).map((value) => <option key={value}>{value}</option>)}</select></label>
                 <label className="grid gap-1.5 text-sm font-medium text-[#33483b]">Terreno<select value={terrain} onChange={(event) => setTerrain(event.target.value as Terrain)} className="h-11 rounded-xl border border-[#ded8cc] bg-[#fffdfa] px-3 outline-none focus:border-[#3f7659]">{(["Plano", "Destapado", "Subida"] as Terrain[]).map((value) => <option key={value}>{value}</option>)}</select></label>
                 <Field label={`Inclinación (${inclination}%)`} type="range" min="0" max="15" value={inclination} onChange={(event) => setInclination(Number(event.target.value))} className="h-11 accent-[#235b42]" />
               </div>
+              <div className="grid gap-4 rounded-2xl border border-[#e6e0d5] bg-[#fffdfa] p-4 sm:grid-cols-[1fr_auto] sm:items-end">
+                <div className="grid gap-4 sm:grid-cols-2"><Field label="BPM manual" type="number" min="30" max="220" placeholder="Ej. 82" value={manualBpm} onChange={(event) => setManualBpm(event.target.value)} /><div className="grid gap-1.5 text-sm font-medium text-[#33483b]"><span>BPM por cámara (opcional)</span><div className="flex h-11 items-center gap-3"><button type="button" onClick={() => void toggleCamera()} className="flex h-10 items-center gap-1.5 rounded-xl bg-[#eef3ed] px-3 text-xs font-semibold text-[#235b42] hover:bg-[#dbe8dc]"><Camera className="size-4" />{cameraActive ? "Apagar" : "Activar cámara"}</button><strong>{cameraBpm ? `${cameraBpm} BPM` : "—"}</strong></div></div></div>
+                <div className="overflow-hidden rounded-xl bg-[#173c2c] sm:w-28">{cameraActive ? <video ref={videoRef} autoPlay muted playsInline className="h-20 w-full object-cover" /> : <div className="flex h-20 items-center justify-center text-[#b9d6bf]"><Camera className="size-7" /></div>}<canvas ref={cameraCanvasRef} className="hidden" /></div>
+                <p className="text-xs leading-5 text-[#697267] sm:col-span-2">La cámara usa una estimación experimental de movimiento y no reemplaza un pulsómetro ni una medición médica.</p>
+              </div>
               <div className="rounded-2xl bg-[#e9f0ea] p-4 text-center text-lg font-bold text-[#235b42]">Quemaste {formatNumber(calculation.kcal)} kcal <span className="mx-1 text-[#8ba08e]">|</span> {calculation.bpm} BPM <span className="mx-1 text-[#8ba08e]">|</span> {calculation.km.toFixed(1)} km</div>
+              <p className="text-center text-xs text-[#697267]">Fórmula: {ACTIVITY_MET[activity]} MET × {Number(weightKg) || 70} kg × {stopwatchSeconds ? `${stopwatchSeconds}s` : `${Number(minutes) || 0} min`}, con ajustes por clima y terreno.</p>
+              <button type="button" disabled={savingActivity || !user} onClick={() => void saveActivity()} className="flex items-center justify-center gap-2 rounded-xl bg-[#e4b45b] px-4 py-3 font-bold text-[#173c2c] transition hover:bg-[#dba848] disabled:cursor-not-allowed disabled:opacity-60"><Save className="size-4" />{savingActivity ? "Guardando actividad…" : "Guardar actividad en Supabase"}</button>
             </div>
           </Section>
 
